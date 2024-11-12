@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" href="favicon.ico" />
+  <title>Flexagon Templates</title>
+
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+        'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+        sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    span.title {
+      font-size: xx-large;
+      font-weight: 600;
+      padding-right: 10px;
+    }
+
+  </style>
+
+  <script src="flexagonator_1.js"></script>
+  <script src="templates_1.js"></script>
+  <script type="text/javascript">
+    const gDefaultSize = 800;
+    let gName = "";  // current template
+
+    function fillTemplateList() {
+      const input = document.getElementById("templateList");
+      const ids = Object.getOwnPropertyNames(allTemplates);
+      for (const id of ids) {
+        const option = document.createElement("option");
+        option.value = id;
+        if (id.startsWith("fig")) {
+          option.text = `figure ${id.substring(3)}`;
+        } else {
+          option.text = id;
+        }
+        input.add(option);
+      }
+      input.selectedIndex = 0;
+    }
+
+    function clearAll() {
+      setElementSize("image", 0, 0);
+      for (let i = 0; i < 6; i++) {
+        setElementSize(`image-${i + 1}`, 0, 0);
+      }
+    }
+
+    function enableButtons(name) {
+      // can display front/back for a scripted template, but not a bitmap
+      const disabled = isBitmapTemplate(name);
+      document.getElementById("frontButton").disabled = disabled;
+      document.getElementById("backButton").disabled = disabled;
+    }
+
+    function showTemplate(name, face) {
+      gName = name;
+      clearAll();
+      drawTemplate(name, "image", face);
+      enableButtons(name);
+    }
+  </script>
+</head>
+
+<body>
+
+  <p>
+    <span class="title">Templates</span>
+    <select id="templateList" onchange="showTemplate(event.target.value)"></select>
+    &nbsp;&nbsp;&nbsp;
+    show faces:
+    <input onclick="showTemplate(gName, 'both');" type="button" value="front & back" id="bothButton" />
+    <input onclick="showTemplate(gName, 'front');" type="button" value="front" id="frontButton" />
+    <input onclick="showTemplate(gName, 'back-y');" type="button" value="back" id="backButton" />
+  </p>
+
+  <canvas id="image" width="800" height="800"></canvas>
+  <canvas id="image-1" width="800" height="800"></canvas>
+  <canvas id="image-2" width="800" height="800"></canvas>
+  <canvas id="image-3" width="800" height="800"></canvas>
+  <canvas id="image-4" width="800" height="800"></canvas>
+  <canvas id="image-5" width="800" height="800"></canvas>
+  <canvas id="image-6" width="800" height="800"></canvas>
+
+  <script type="text/javascript">
+    fillTemplateList();
+    showTemplate("fig1.2");
+  </script>
+</body>
+
+</html>

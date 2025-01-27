@@ -3,28 +3,27 @@
 
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" href="favicon.ico" />
+  <link rel="stylesheet" href="common.css">
   <title>Flexagon Inspector</title>
 
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-        'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-        sans-serif;
-      -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
-    }
-
-  </style>
-
-  <script src="flexagonator_1.js"></script>
+  <script src="flexagonator_2.js"></script>
   <script>
+    // optional URL search parameters
+    const paramName = 'name';
+    const paramGenerator = 'generator';
+    const paramPats = 'pats';
+    const paramFlexes = 'flexes';
+    const paramSlices = 'slices';
+
     const creator = new Flexagonator.Creator([0x7fbcff, 0x7fff82, 0xff827f, 0xc27fff, 0xfbff7f, 0xa58252, 0xdddddd]);
     let buttons = null;
     let selectedPieces = { patsPrefix: 6 };  // track selected flexagon name pieces
     let gFace = 'both';  // track whether template should show front and/or back faces
     let gRotate = 0;     // for special flexagon shapes, rotate the displayed flexagon
     let gSlices = null;  // track how they want the template sliced
+    let gSliceStr = '';  // visible string describing slices
 
     function updateUI() {
       const fm = creator.getFlexagonManager();
@@ -39,6 +38,7 @@
         historyBox.value = history;
       }
       showFlexagonName();
+      showUrlParams();
       statusMessage('flexagonStatus', "in state " + (fm.getCurrentState() + 1) + " of " + fm.getTotalStates());
     }
 
@@ -249,6 +249,7 @@
       statusMessage('sliceStatus');
       document.getElementById('enterSlices').value = '';
       gSlices = null;
+      gSliceStr = '';
     }
 
     function parseSlices(text) {
@@ -269,6 +270,9 @@
       });
       gSlices.push({ start: last });  // everything else
       drawTemplates();
+
+      gSliceStr = text;
+      showUrlParams();
     }
 
     function setTemplateFaces(option) {
@@ -304,28 +308,109 @@
       }
     }
 
+    // if there are URL search params, use them to initialize everything,
+    // e.g., ?name=pentaflexagon&generator=P* or ?pats=21&flexes=T%3CLtb'
+    function initFromURLParams() {
+      const params = new URLSearchParams(document.location.search);
+
+      // take apart the name & set the individual pieces if present
+      const name = params.get(paramName);
+      if (name) {
+        const pieces = Flexagonator.namePiecesFromName(name);
+        const pats = Flexagonator.greekPrefixToNumber(pieces.patsPrefix);
+        if (pats) {
+          setPatCount(pats.toString());
+        }
+        if (pieces.overallShape) {
+          setOverallShape(pieces.overallShape);
+        }
+        if (pieces.leafShape) {
+          setLeafShape(pieces.leafShape);
+        }
+      }
+
+      // generating sequence
+      const generator = params.get(paramGenerator);
+      if (generator) {
+        handleCreation(creator.createFromSequence(generator));
+        document.getElementById('enterGenerator').value = generator;
+      }
+
+      // pat structure
+      const createPats = params.get(paramPats);
+      if (createPats) {
+        handleCreation(creator.createFromPats(createPats));
+        document.getElementById('enterPats').value = createPats;
+      }
+
+      // flexes
+      const flexes = params.get(paramFlexes);
+      if (flexes) {
+        applyFlexes(flexes);
+        document.getElementById('enterFlexes').value = flexes;
+      }
+
+      // slices
+      const slices = params.get(paramSlices);
+      if (slices) {
+        parseSlices(slices);
+        document.getElementById('enterSlices').value = slices;
+      }
+    }
+
+    // take the current UI settings & turn them into URL params that can be used to recreate them
+    function getUrlParams() {
+      const name = `${paramName}=${encodeURIComponent(creator.getSimpleName())}`;
+      const generator = () => {
+        const generator = creator.getGenerator();
+        const withSpaces = generator?.replace(/ /g, ''); // strip spaces
+        return generator ? `&${paramGenerator}=${encodeURIComponent(generator)}` : '';
+      };
+      const pats = () => {
+        const pats = creator.getCreationPats();
+        return pats ? `&${paramPats}=${encodeURIComponent(pats)}` : '';
+      }
+      const flexes = () => {
+        const fm = creator.getFlexagonManager();
+        const flexes = fm ? fm.getFlexHistory().join('') : null;
+        return flexes ? `&${paramFlexes}=${encodeURIComponent(flexes)}` : '';
+      }
+      const slices = gSliceStr ? `&${paramSlices}=${gSliceStr}` : '';
+      return `?${name}${generator()}${pats()}${flexes()}${slices}`;
+    }
+
+    function showUrlParams() {
+      document.getElementById('urlParams').value = getUrlParams();
+    }
+
   </script>
 </head>
 
 <body>
   <noscript>You need to enable JavaScript to run this app.</noscript>
-  <h1>Flexagon Inspector</h1>
+  <h1 class="title">
+    Flexagon Inspector
+    <span class="title-small">companion app for</span>
+    <a class="title-link" href="https://www.routledge.com/The-Secret-World-of-Flexagons-Fascinating-Folded-Paper-Puzzles/Elran-Schwartz-Sherman/p/book/9781032553832">
+      <span class="title-medium">The Secret World of Flexagons</span>
+    </a>
+  </h1>
 
   <!-- create flexagon -->
   <input onclick="clearPieces();" type="button" value="clear" />
-  overall shape:
+  <label for="nameOverall">overall shape:</label>
   <select id="nameOverall" onchange="setOverallShape(event.target.value)" style="min-width: 150px;"></select>
-  &nbsp;&nbsp;&nbsp;leaf shape:
+  &nbsp;&nbsp;&nbsp;<label for="nameLeaf">leaf shape:</label>
   <select id="nameLeaf" onchange="setLeafShape(event.target.value)" style="min-width: 100px;"></select>
-  &nbsp;&nbsp;&nbsp;pat count:
+  &nbsp;&nbsp;&nbsp;<label for="nameCount">pat count:</label>
   <select id="nameCount" onchange="setPatCount(event.target.value)" style="min-width: 50px;"></select>
 
   <p>
     <input onclick="applyGenerator();" type="button" value="generating sequence" />
-    <input onkeypress="checkGenerator(event.keyCode)" id="enterGenerator" size="25" spellcheck="false" />
+    <input onkeypress="checkGenerator(event.keyCode)" id="enterGenerator" aria-label="generating sequence" size="25" spellcheck="false" />
     &nbsp;&nbsp;&nbsp;
     <input onclick="applyPats();" type="button" value="create pats" />
-    <input onkeypress="checkPats(event.keyCode)" id="enterPats" size="25" spellcheck="false" />
+    <input onkeypress="checkPats(event.keyCode)" id="enterPats" aria-label="create pats" size="25" spellcheck="false" />
   </p>
   <div id="creatorFlexes"></div>
   <div id="creatorStatus"></div>
@@ -339,36 +424,39 @@
 
   <p>
     <input onclick="applyFlexes();" type="button" value="apply flexes" />
-    <input onkeypress="checkSequence(event.keyCode, event.target.value)" id="enterFlexes" size="75" spellcheck=false />
+    <input onkeypress="checkSequence(event.keyCode, event.target.value)" id="enterFlexes" aria-label="apply flexes" size="75" spellcheck=false />
   </p>
   <p>
     <input onclick="undo();" type="button" value="undo" />
     <input onclick="redo();" type="button" value="redo" />
-    <textarea id="history" cols="75" rows="1" readonly=true></textarea>
+    <textarea id="history" aria-label="history" cols="75" rows="1" readonly=true></textarea>
   </p>
 
   <input type="checkbox" id="advancedCheck" onclick="setAdvanced(event.target.checked)">
   <label for="advancedCheck"> advanced options</label>
   <br>
   <div id="advancedArea" hidden="true">
-    creation script:<br/>
+    <label for="creationScript">creation script:</label><br/>
     <textarea id="creationScript" cols="75" rows="4" readonly=true></textarea>
     <br/><br/>
     <input onclick="applyScript();" type="button" value="apply script" /><br/>
-    <textarea id="script" cols="75" rows="4" spellcheck=false></textarea>
+    <textarea id="script" aria-label="apply script" cols="75" rows="4" spellcheck=false></textarea>
     <div id="scriptStatus"></div>
+    <br/>
+    <label for="urlParams">URL parameters:</label>
+    <input id="urlParams" size="70" spellcheck=false readonly=true />
   </div>
 
   <!-- unfolded template -->
   <hr />
   <p>
-    show faces:
-    <input onclick="setTemplateFaces('both');" type="button" value="front & back" />
+    <label for="bothFaces">show faces:</label>
+    <input onclick="setTemplateFaces('both');" type="button" value="front & back" id="bothFaces" />
     <input onclick="setTemplateFaces('front');" type="button" value="front" />
     <input onclick="setTemplateFaces('back-y');" type="button" value="back" />
     &nbsp;&nbsp;&nbsp;
     <input onclick="applySlices();" type="button" value="leaves per slice" />
-    <input onkeypress="checkSlices(event.keyCode)" id="enterSlices" size="25" spellcheck=false />
+    <input onkeypress="checkSlices(event.keyCode)" id="enterSlices" aria-label="leaves per slice" size="25" spellcheck=false />
     &nbsp;&nbsp;&nbsp;
     <span id="sliceStatus"></span>
   </p>
@@ -387,6 +475,7 @@
     fillNameLists();
     updateUI();
     showCreationScript();
+    initFromURLParams();
 
     let interface = document.getElementById('interface');
     interface.addEventListener('mousemove', interfaceMouseMove, false);

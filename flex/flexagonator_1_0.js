@@ -126,6 +126,8 @@ var Flexagonator;
             // the following 3 collections are aligned with each other
             this.flexagons = [];
             this.found = [];
+            // flexagons grouped by pat structure (cached)
+            this.grouped = null;
             // initialize flexes
             this.right = right;
             this.over = over;
@@ -155,8 +157,17 @@ var Flexagonator;
         getFlexGraph() {
             return new Flexagonator.FlexGraph(this.flexagons, this.found);
         }
-        // check the next unexplored state
-        // returns false once there are no more states to explore
+        /** get lists of flexagons grouped by pat structure (computed then cached) */
+        fetchGroupByStructure() {
+            if (this.grouped === null || this.grouped.length === 0) {
+                this.grouped = Flexagonator.groupByStructure(this.flexagons);
+            }
+            return this.grouped;
+        }
+        /**
+         * check the next unexplored state
+         * returns false once there are no more states to explore
+         */
         checkNext() {
             if (this.current === this.flexagons.length) {
                 return false;
@@ -235,12 +246,234 @@ var Flexagonator;
 var Flexagonator;
 (function (Flexagonator) {
     /**
+     * Find flex sequences that cycle starting from a given state within a list of flexagon states.
+     * Restrict search to states that start & end with the same pat structure.
+     */
+    class FindGroupCycles {
+        /**
+         * @param states a list of flexagon states (perhaps the output of Explore())
+         * @param start index of state to start from
+         * @param flexes try sequences that use these flexes
+         * @param groups flexagons (indices into states) grouped by pat structure (computed if not passed in)
+         */
+        constructor(states, start, flexes, groups) {
+            this.states = states;
+            this.start = start;
+            this.flexes = flexes;
+            this.groups = groups;
+            this.error = null;
+            // step 2
+            this.cyclesDone = false;
+            this.cyclesIndex = 0;
+            // results
+            this.cycles = [];
+            this.right = flexes['>'];
+            this.over = flexes['^'];
+            if (this.right === undefined || this.over === undefined) {
+                this.error = { groupCycleError: "need definitions for > and ^" };
+            }
+        }
+        /**
+         * do next incremental step of finding cycles,
+         * returns false once it's completely done or there's an error
+         */
+        checkNext() {
+            if (this.error !== null || this.cyclesDone) {
+                return false; // done
+            }
+            // next slice of work
+            if (this.searchStates === undefined) {
+                return this.findSearchStates();
+            }
+            else if (!this.cyclesDone) {
+                return this.checkNextCycle();
+            }
+            return false;
+        }
+        /** get info about cycles that were found */
+        getCycles() {
+            return this.cycles;
+        }
+        /** get error explanation, if any */
+        getError() {
+            return this.error;
+        }
+        /** total number of cycles, or 0 if we don't know yet */
+        getCycleCount() {
+            return this.searchStates !== undefined ? this.searchStates.length : 0;
+        }
+        /** how many cycles we've found */
+        getFoundCount() {
+            return this.cycles.length;
+        }
+        /** find all the flexagons with the same pat structure, which we'll search thru */
+        findSearchStates() {
+            var _a;
+            const groups = (_a = this.groups) !== null && _a !== void 0 ? _a : Flexagonator.groupByStructure(this.states);
+            const searchStates = findStructureGroup(groups, this.start);
+            if (searchStates === null) {
+                this.error = { groupCycleError: "invalid start" };
+                return false;
+            }
+            else if (searchStates.length === 0) {
+                this.error = { groupCycleError: "no other states with same pat structure" };
+                return false;
+            }
+            this.searchStates = searchStates;
+            return true; // still more steps
+        }
+        /** find sequence that goes from start to next target & see how long it takes to cycle */
+        checkNextCycle() {
+            if (this.searchStates === undefined) {
+                return false;
+            }
+            const start = this.states[this.start];
+            if (this.findSequence === undefined) {
+                // start a new search for a sequence from start to next target
+                const end = this.states[this.searchStates[this.cyclesIndex]];
+                this.findSequence = new Flexagonator.FindShortest(start, end, this.flexes, this.right, this.over);
+                return true; // keep going
+            }
+            else if (this.findSequence.checkLevel()) {
+                return true; // keep going
+            }
+            // done with search
+            const result = this.findSequence.getFlexes();
+            this.findSequence = undefined;
+            // see if we need to shift to get back to original pat structure
+            const extra = extraNeeded(start, result, this.flexes);
+            const sequence = extra === null ? "" : extra === "" ? result : `${result} ${extra}`;
+            // get length of cycle
+            const cycleLength = getCycleLength(start, this.flexes, sequence);
+            this.cycles.push({ sequence, cycleLength });
+            // are we completely done?
+            this.cyclesDone = ++this.cyclesIndex >= this.searchStates.length;
+            return !this.cyclesDone;
+        }
+    }
+    Flexagonator.FindGroupCycles = FindGroupCycles;
+    function isGroupCycleError(result) {
+        return result && result.groupCycleError !== undefined;
+    }
+    Flexagonator.isGroupCycleError = isGroupCycleError;
+    /** return the indices into 'states' of all the flexagons that share the pat structure of states[index] */
+    function findStructureGroup(groups, index) {
+        for (let i = 0; i < groups.length; i++) {
+            for (const j of groups[i]) {
+                if (j === index) {
+                    return groups[i].filter(k => k !== index);
+                }
+            }
+        }
+        return null;
+    }
+    /** return any additional shifts needed to preserve the pat structure, or null if not supported */
+    function extraNeeded(f1, sequence, flexes) {
+        const fm = new Flexagonator.FlexagonManager(f1, undefined, flexes);
+        fm.applyFlexes(sequence, false);
+        let extra = "";
+        for (let i = 0; i < f1.getPatCount(); i++) {
+            if (f1.isSameStructure(fm.flexagon)) {
+                return extra;
+            }
+            fm.applyFlex(">");
+            extra += ">";
+        }
+        fm.applyFlex("^");
+        extra = "^";
+        for (let i = 0; i < f1.getPatCount(); i++) {
+            if (f1.isSameStructure(fm.flexagon)) {
+                return extra;
+            }
+            fm.applyFlex(">");
+            extra += ">";
+        }
+        return null;
+    }
+    /**
+     * find out how long it takes flex sequence to cycle back to original state,
+     * assumes we already know that 'sequence' preserves the original pat structure
+     */
+    function getCycleLength(original, flexes, sequence) {
+        const fm = new Flexagonator.FlexagonManager(original, undefined, flexes);
+        for (let i = 0; i < maxIterations; i++) {
+            fm.applyFlexes(sequence, false);
+            if (original.isSameState(fm.flexagon)) {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+    const maxIterations = 1000;
+})(Flexagonator || (Flexagonator = {}));
+var Flexagonator;
+(function (Flexagonator) {
+    /**
+     * search through a collection of flexagons for any that have a rearranged version of a given pat
+     * @returns the indices of any matching flexagons
+     */
+    function findRearrangements(flexagons, leafTree) {
+        const pat = Flexagonator.makePat(leafTree);
+        if (Flexagonator.isError(pat)) {
+            return pat;
+        }
+        const flipped = pat.makeFlipped();
+        const patIds = getSortedIds(pat);
+        const leafCount = patIds.length;
+        const found = [];
+        for (let i = 0; i < flexagons.length; i++) {
+            const flexagon = flexagons[i];
+            for (const thisPat of flexagon.pats) {
+                if (leafCount === thisPat.getLeafCount() && !pat.isEqual(thisPat) && !flipped.isEqual(thisPat)) {
+                    const thisIds = getSortedIds(thisPat);
+                    if (patIds.every((v, j) => thisIds[j] === v)) {
+                        found.push(i);
+                        continue;
+                    }
+                }
+            }
+        }
+        return found;
+    }
+    Flexagonator.findRearrangements = findRearrangements;
+    /** get a sorted list of all leaf ids in the given pat */
+    function getSortedIds(pat) {
+        const ids = getIds(pat.getAsLeafTree());
+        return ids.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+    }
+    /** get a list of all positive ids in this LeafTree */
+    function getIds(tree) {
+        if (typeof (tree) === "number") {
+            return [Math.abs(tree)];
+        }
+        if (Array.isArray(tree) && tree.length === 2) {
+            const ids1 = getIds(tree[0]);
+            const ids2 = getIds(tree[1]);
+            return ids1.concat(ids2);
+        }
+        return [];
+    }
+})(Flexagonator || (Flexagonator = {}));
+var Flexagonator;
+(function (Flexagonator) {
+    /**
      * object that searches for the shortest flex sequence from a starting state
      * to an ending state using a given set of sequences.
      * NOTE: returns the first sequence it finds, though
      * there may be others of the same length
      */
     class FindShortest {
+        static make(start, end, flexes, right, over) {
+            const startFlexagon = Flexagonator.Flexagon.makeFromTree(start);
+            if (Flexagonator.isTreeError(startFlexagon)) {
+                return startFlexagon;
+            }
+            const endFlexagon = Flexagonator.Flexagon.makeFromTree(end);
+            if (Flexagonator.isTreeError(endFlexagon)) {
+                return endFlexagon;
+            }
+            return new FindShortest(startFlexagon, endFlexagon, flexes, right, over);
+        }
         // we're at 'start' and we want to find the shortest flex sequence from 'flexes'
         // that will take us to 'end'
         constructor(start, end, flexes, right, over) {
@@ -267,17 +500,6 @@ var Flexagonator;
             const relflex = new Flexagonator.RelativeFlex(0, false, "", 0);
             const level = [{ flex: relflex, previous: -1 }];
             this.levels.push(level);
-        }
-        static make(start, end, flexes, right, over) {
-            const startFlexagon = Flexagonator.Flexagon.makeFromTree(start);
-            if (Flexagonator.isTreeError(startFlexagon)) {
-                return startFlexagon;
-            }
-            const endFlexagon = Flexagonator.Flexagon.makeFromTree(end);
-            if (Flexagonator.isTreeError(endFlexagon)) {
-                return endFlexagon;
-            }
-            return new FindShortest(startFlexagon, endFlexagon, flexes, right, over);
         }
         wasFound() {
             return this.found;
@@ -600,6 +822,130 @@ var Flexagonator;
 })(Flexagonator || (Flexagonator = {}));
 var Flexagonator;
 (function (Flexagonator) {
+    /**
+     * Get a list of all the ways to fold a template into a single pat, or null if none
+     * @param directions directions between leaves in the template to fold, e.g. /\\///
+     */
+    function getAllSinglePats(directions, flexes) {
+        const dirs = toDirections(directions);
+        if (dirs === null) {
+            return null;
+        }
+        const template = toPattern(dirs);
+        return tryFolds(template, flexes);
+    }
+    Flexagonator.getAllSinglePats = getAllSinglePats;
+    /** the basic flexes needed to fold a strip */
+    class FoldFlexes {
+        constructor() {
+            this.allFlexes = Flexagonator.makeAtomicFlexes('blocks');
+        }
+        shiftRight(pattern) {
+            const result = this.allFlexes['>'].apply(pattern);
+            return Flexagonator.isAtomicPatternError(result) ? false : result;
+        }
+        shiftLeft(pattern) {
+            const result = this.allFlexes['<'].apply(pattern);
+            return Flexagonator.isAtomicPatternError(result) ? false : result;
+        }
+        foldRight(pattern) {
+            const result = this.allFlexes["Ur'"].apply(pattern);
+            return Flexagonator.isAtomicPatternError(result) ? false : result;
+        }
+        foldLeft(pattern) {
+            const result = this.allFlexes["Ul'"].apply(pattern);
+            return Flexagonator.isAtomicPatternError(result) ? false : result;
+        }
+        /** reset current hinge to far left */
+        reset(pattern) {
+            let attempt = pattern;
+            while (attempt !== false) {
+                pattern = attempt;
+                attempt = this.shiftLeft(pattern);
+            }
+            return pattern;
+        }
+    }
+    Flexagonator.FoldFlexes = FoldFlexes;
+    function toDirections(directions) {
+        const dirs = [];
+        for (const d of directions) {
+            if (d === '/')
+                dirs.push('/');
+            else if (d === '\\' || d === '|')
+                dirs.push('\\');
+            else
+                return null;
+        }
+        return dirs;
+    }
+    /** e.g., /\\ into 'a # 1 / 2 \ 3 \ b' */
+    function toPattern(directions) {
+        const right = directions.map((d, i) => {
+            return { pat: Flexagonator.makePat(i + 1), direction: d };
+        });
+        return {
+            otherLeft: 'a',
+            left: null,
+            right,
+            otherRight: 'b',
+            singleLeaf: false,
+        };
+    }
+    /**
+     * try folding at every hinge, recursing whenever successful
+     * @returns list of all ways it can be folded into a single pat
+     */
+    function tryFolds(pattern, flexes) {
+        const count = Flexagonator.getPatsCount(pattern.left) + Flexagonator.getPatsCount(pattern.right);
+        if (count <= 1) {
+            // we're down to a single pat, so return it
+            const pats = Flexagonator.getAtomicPatternPats(pattern);
+            const dirs = Flexagonator.getAtomicPatternDirections(pattern);
+            const direction = dirs[dirs.length - 1];
+            return { pats, direction };
+        }
+        // at each hinge, try folding left & right, recursing on success
+        let pats = [];
+        let direction = '/';
+        pattern = flexes.reset(pattern);
+        for (let i = 0; i < count; i++) {
+            const tryLeft = flexes.foldLeft(pattern);
+            if (tryLeft) {
+                const pr = tryFolds(tryLeft, flexes);
+                if (pr !== null) {
+                    pats = addNonDupes(pats, pr.pats);
+                    direction = pr.direction;
+                }
+            }
+            else {
+                const tryRight = flexes.foldRight(pattern);
+                if (tryRight) {
+                    const pr = tryFolds(tryRight, flexes);
+                    if (pr !== null) {
+                        pats = addNonDupes(pats, pr.pats);
+                        direction = pr.direction;
+                    }
+                }
+            }
+            // step to next hinge
+            const next = flexes.shiftRight(pattern);
+            pattern = next ? next : pattern;
+        }
+        return pats.length === 0 ? null : { pats, direction };
+    }
+    function addNonDupes(pats1, pats2) {
+        const pats = pats1.concat([]);
+        for (const p2 of pats2) {
+            if (pats.every(p => !p.isEqual(p2))) {
+                pats.push(p2);
+            }
+        }
+        return pats;
+    }
+})(Flexagonator || (Flexagonator = {}));
+var Flexagonator;
+(function (Flexagonator) {
     /*
       Utilities for creating DOT graph descriptions of the
       state transitions described by a list of RelativeFlexes
@@ -731,7 +1077,7 @@ var Flexagonator;
         const groupElements = makeGroupElements(cycleCount);
         const rows = makeRows(minimalFm, flexElements);
         if (isGroupError(rows)) {
-            return Object.assign({}, rows, { minimalPats });
+            return Object.assign(Object.assign({}, rows), { minimalPats });
         }
         const commutative = isCommutative(rows);
         const table = {
@@ -1153,8 +1499,10 @@ var Flexagonator;
         getTotalStates() {
             return this.states.length;
         }
-        // if we've seen this flexagon before, return which one,
-        // else add it to our list and return it's new index
+        /**
+         * if we've seen this flexagon before, return which one,
+         * else add it to our list and return new index
+         */
         findMaybeAdd(flexagon) {
             const state = new StructureState(flexagon);
             const i = this.getIndex(state);
@@ -1164,7 +1512,7 @@ var Flexagonator;
             this.states.push(state);
             return this.states.length - 1;
         }
-        // returns which state we have, or null if we haven't seen it before
+        /** returns which state we have, or null if we haven't seen it before */
         getIndex(state) {
             const i = this.states.findIndex(thisState => thisState.isEqualTo(state));
             return i !== -1 ? i : null;
@@ -1175,17 +1523,21 @@ var Flexagonator;
         constructor(flexagon) {
             this.stateA = flexagon.pats.map(p => p.getStructure());
             this.stateB = flexagon.pats.map(p => p.makeFlipped().getStructure()).reverse();
+            if (flexagon.directions) {
+                this.dirsA = flexagon.directions.asRaw();
+                this.dirsB = this.dirsA.reverse();
+            }
         }
         /** are the pat structures of 'this' & 'state' the same? */
         isEqualTo(state) {
             const patCount = state.stateA.length;
             for (let i = 0; i < patCount; i++) {
-                if (areEqual(patCount, this.stateA, state.stateA, i)) {
+                if (areEqual(patCount, i, this.stateA, state.stateA, this.dirsA, state.dirsA)) {
                     return true;
                 }
             }
             for (let i = 0; i < patCount; i++) {
-                if (areEqual(patCount, this.stateB, state.stateA, i)) {
+                if (areEqual(patCount, i, this.stateB, state.stateA, this.dirsB, state.dirsA)) {
                     return true;
                 }
             }
@@ -1194,9 +1546,13 @@ var Flexagonator;
     }
     Flexagonator.StructureState = StructureState;
     /** is state1[i] = state2[start+i] for every i? */
-    function areEqual(len, state1, state2, start) {
+    function areEqual(len, start, state1, state2, dirs1, dirs2) {
         for (let i = 0; i < len; i++) {
-            if (state1[i] !== state2[(i + start) % len]) {
+            const j = (i + start) % len;
+            if (state1[i] !== state2[j]) {
+                return false;
+            }
+            if (dirs1 && dirs2 && dirs1[i] !== dirs2[j]) {
                 return false;
             }
         }
@@ -1331,10 +1687,10 @@ var Flexagonator;
         Mkh: "Xr~ >>> Xl <<<",
         Mkt: "< Ur ^<<< Ur' <<^ Xl <<<",
         // built from morph-kite flexes
-        F: "Mkf Mkb'",
-        St: "Mkf Mkfs'",
-        Fm: "< Mkr Mkb' >",
-        S3: "< Mkr Mkl' >",
+        F: "Mkf Mkb'", // K > Ul' <^> Ul < K' ^
+        St: "Mkf Mkfs'", // K > Ul' < Ur << Ul >> Ur' > K' <
+        Fm: "< Mkr Mkb' >", // Xr<<< Ur>>Ur' ^ > Ul < K' ^>
+        S3: "< Mkr Mkl' >", // Xr<<< Ur>>Ur'< Ur>>Ur'<< Xl>>
         // these have simpler forms, but can be built from morph-kite flexes
         Tfromm: "< Mkr Mkf' >",
         Sfromm: "< Mkfs Mkb' >",
@@ -1518,13 +1874,13 @@ var Flexagonator;
                     // TODO: handle the 'turnOver' case
                     const left = input.right.slice(1).reverse();
                     const right = [input.right[0]];
-                    return Object.assign({}, input, { left, right });
+                    return Object.assign(Object.assign({}, input), { left, right });
                 }
                 const item = input.left !== null ? input.left[input.left.length - 1] : input.right[0];
                 const toWrap = turnOver ? this.turnOver(item) : item;
                 const left = input.left !== null ? input.left.slice(0, input.left.length - 1) : null;
                 const right = input.right !== null ? input.right.concat(toWrap) : [toWrap];
-                return Object.assign({}, input, { left, right });
+                return Object.assign(Object.assign({}, input), { left, right });
             }
             else if (this.specialWrap === 'r') {
                 // check if we need to move the current hinge from 'right' to 'left'
@@ -1532,13 +1888,13 @@ var Flexagonator;
                     // TODO: handle the 'turnOver' case
                     const left = [input.left[0]];
                     const right = input.left.slice(1).reverse();
-                    return Object.assign({}, input, { left, right });
+                    return Object.assign(Object.assign({}, input), { left, right });
                 }
                 const item = input.right !== null ? input.right[input.right.length - 1] : input.left[0];
                 const toWrap = turnOver ? this.turnOver(item) : item;
                 const left = input.left !== null ? input.left.concat(toWrap) : [toWrap];
                 const right = input.right !== null ? input.right.slice(0, input.right.length - 1) : null;
-                return Object.assign({}, input, { left, right });
+                return Object.assign(Object.assign({}, input), { left, right });
             }
             return input;
         }
@@ -1876,8 +2232,8 @@ var Flexagonator;
         "//", "//", "|/", "/|", Flexagonator.FlexRotation.BCA);
         // only works on a hexa
         if (patCount === 6) {
-            flexes["Mkh"] = Flexagonator.makeFlex("morph-kite: fold in half", [[-2, 1], -3, -4, [6, -5], 7, 8], [2, 3, [-5, 4], -6, -7, [1, -8]], Flexagonator.FlexRotation.BCA, "//////", "/|//|/");
-            flexes["Mkt"] = Flexagonator.makeFlex("morph-kite: partial tuck", [2, 3, 4, [-6, 5], -7, [1, -8]], [[-2, 1], -3, [5, -4], 6, 7, 8], Flexagonator.FlexRotation.BCA, "//////", "/|//|/");
+            flexes["Mkh"] = Flexagonator.makeFlex("morph-kite: fold in half", [[-2, 1], -3, -4, [6, -5], 7, 8], [2, 3, [-5, 4], -6, -7, [1, -8]], Flexagonator.FlexRotation.BAC, "//////", "/|//|/");
+            flexes["Mkt"] = Flexagonator.makeFlex("morph-kite: partial tuck", [2, 3, 4, [-6, 5], -7, [1, -8]], [[-2, 1], -3, [5, -4], 6, 7, 8], Flexagonator.FlexRotation.BAC, "//////", "/|//|/");
         }
         // only works on a (////\)2 deca
         if (patCount === 10) {
@@ -1892,7 +2248,7 @@ var Flexagonator;
             flexes["Tu"] = Flexagonator.makeFlex("turn", [1, 2, [-4, 3], -5, -6, -7, -8, -9, [11, -10], 12, 13, 14], [-13, [1, -14], 2, 3, 4, 5, 6, [-8, 7], -9, -10, -11, -12], Flexagonator.FlexRotation.CBA, "|//|//|//|//", "|//|//|//|//");
         }
         // flexes that go between kite positions
-        flexes["Sp"] = Flexagonator.createLocalFlex("partial shuffle", patCount - 5, 8, [1, 2, [-4, 3]], /**/ [-5, [-6, 7]], [[1, -2], -3], /**/ [[5, -4], 6, 7], "/|/", "/|", "|/", "/|/");
+        flexes["Sp"] = Flexagonator.createLocalFlex("partial shuffle", patCount - 5, 8, [1, 2, [-4, 3]], /**/ [-5, [-6, 7]], [[1, -2], -3], /**/ [[5, -4], 6, 7], "/|/", "/|", "|/", "/|/", Flexagonator.FlexRotation.BAC);
         flexes["Ss"] = Flexagonator.createLocalFlex("single slide", patCount - 6, 9, [[-2, 1], -3, -4], /**/ [[6, -5], 7, 8], [1, 2, [-4, 3]], /**/ [-5, -6, [8, -7]], "//|", "//|", "|//", "|//");
         flexes["Lkk"] = Flexagonator.createLocalFlex("kite-to-kite slot", patCount - 6, 9, [1, 2, 3, 4], /**/ [5, [[-7, 6], 8]], [[1, [3, -2]], 4], /**/ [5, 6, 7, 8], "//|/", "/|", "|/", "/|//");
         // backflip = Mkf' Mkb
@@ -1927,7 +2283,7 @@ var Flexagonator;
         if (Flexagonator.isAtomicPatternError(leftover)) {
             return leftover;
         }
-        return Object.assign({}, leftover, { specialDirection, matches });
+        return Object.assign(Object.assign({}, leftover), { specialDirection, matches });
     }
     Flexagonator.matchAtomicPattern = matchAtomicPattern;
     /** find matches on left side & right side, then combine results */
@@ -2302,7 +2658,7 @@ var Flexagonator;
         drawPolygon(paint, corners);
         drawSpokes(paint, corners, polygon.xCenter, polygon.yCenter);
         if (showCurrent === undefined || showCurrent) {
-            drawText(paint, markerText, corners[0], corners[1], "*");
+            drawText(paint, markerText, corners[0], corners[1], "⚹");
         }
         if (showNumbers === undefined || showNumbers) {
             drawFaceText(paint, largeText, polygon.getFaceCenters(0.6), ids, props);
@@ -2362,9 +2718,10 @@ var Flexagonator;
         const count = flexagon.getPatCount();
         for (let i = 0; i < count; i++) {
             const pat = flexagon.pats[front ? i : count - i - 1];
+            const displayPat = front ? pat : pat.makeFlipped();
             const structure = patstructure === StructureType.All
-                ? pat.getStructure()
-                : pat.getStructureLTEId(flexagon.getPatCount());
+                ? displayPat.getStructure()
+                : displayPat.getStructureLTEId(flexagon.getPatCount());
             paint.drawText(structure, centers[i * 2], centers[i * 2 + 1]);
         }
     }
@@ -2889,11 +3246,11 @@ var Flexagonator;
             const sliceIn = paints.map((p, i) => {
                 const [width, height] = p.getSize();
                 const options = this.options[i];
-                return Object.assign({}, options, { width, height });
+                return Object.assign(Object.assign({}, options), { width, height });
             });
             const sliceOut = Flexagonator.computeAcrossSlices(leaflines, sliceIn);
             this.options = sliceOut.map((s, i) => {
-                return Object.assign({}, this.options[i], { scale: s.scale });
+                return Object.assign(Object.assign({}, this.options[i]), { scale: s.scale });
             });
         }
     }
@@ -3503,13 +3860,13 @@ var Flexagonator;
 (function (Flexagonator) {
     /** simplify various tasks around creating flexagons & figuring out their properties */
     class Creator {
-        /** pass colors to use when creating flexagons, initializes a default hexa-hexaflexagon */
+        /** pass colors to use when creating flexagons, initializes a default straight-strip hexa-hexaflexagon */
         constructor(colors) {
             this.colors = colors;
             this.interestingFlexes = [];
             this.primeFlexes = '';
             this.pieces = { patsPrefix: 6 };
-            this.generator = "P* P* P+ > P P+";
+            this.generator = Flexagonator.straightHexaGenerator;
             const script = [
                 { flexes: this.generator },
                 { normalizeIds: true, labelAsTree: colors }
@@ -3532,6 +3889,9 @@ var Flexagonator;
             }
             return name;
         }
+        getSimpleName() { return Flexagonator.namePiecesToName(this.pieces); }
+        getGenerator() { return this.generator; }
+        getCreationPats() { return this.pats; }
         /** get all 3 leaf angles as a string with n significant digits */
         getLeafAngles(n) {
             const angles = this.fm.getAngleInfo().getAngles(this.fm.flexagon);
@@ -3676,9 +4036,6 @@ var Flexagonator;
 (function (Flexagonator) {
     /** understands the directions between adjacent pats or leaves */
     class Directions {
-        constructor(directions) {
-            this.directions = directions;
-        }
         /**
          * how each pat is connected to the previous pat;
          * either as a string - \: up, /: down, assuming previous to left
@@ -3694,6 +4051,9 @@ var Flexagonator;
             }
             return new Directions(directions);
         }
+        constructor(directions) {
+            this.directions = directions;
+        }
         /** does the pat after the ith pat go to the lower right if previous was to the left? */
         isDown(i) { return this.directions[i]; }
         getCount() { return this.directions.length; }
@@ -3708,9 +4068,6 @@ var Flexagonator;
     Flexagonator.Directions = Directions;
     /** used to specify optional directions between adjacent pats or leaves */
     class DirectionsOpt {
-        constructor(directions) {
-            this.directions = directions;
-        }
         /**
          * how each pat is connected to the previous pat;
          * either as a string - \: up, /: down, ?:don't care, assuming previous to left
@@ -3736,6 +4093,9 @@ var Flexagonator;
                 }
             }
             return new DirectionsOpt(directions);
+        }
+        constructor(directions) {
+            this.directions = directions;
         }
         getCount() { return this.directions.length; }
         /** if 'jsonFriendly', use | instead of \ so escaping doesn't obfuscate the patterns */
@@ -3828,7 +4188,8 @@ var Flexagonator;
 var Flexagonator;
 (function (Flexagonator) {
     /**
-     * if the first leaf after the reference hinge has angles ABC (A in the center/lower & B clockwise),
+     * if the first leaf after the reference hinge has angles ABC
+     *  (A in the center/lower & B counterclockwise),
      * this describes the new arrangement of angles after a given flex
      */
     let FlexRotation;
@@ -4228,8 +4589,28 @@ var Flexagonator;
         getVisible() {
             return [this.getTopIds(), this.getBottomIds()];
         }
-        getThickness() {
-            return this.pats.map(pat => pat.getThickness());
+        getThicknesses() {
+            return this.pats.map(pat => pat.getLeafCount());
+        }
+        /** check if flexagons are in the same state: pat structure, leaf ids, & directions */
+        isSameState(other) {
+            if (this.pats.length !== other.pats.length) {
+                return false;
+            }
+            if (this.pats.some((p, i) => !p.isEqual(other.pats[i]))) {
+                return false;
+            }
+            return this.hasEqualDirections(other);
+        }
+        /** check if flexagons have the same pat structure & directions, ignoring leaf ids */
+        isSameStructure(other) {
+            if (this.pats.length !== other.pats.length) {
+                return false;
+            }
+            if (this.pats.some((p, i) => !p.isEqualStructure(other.pats[i]))) {
+                return false;
+            }
+            return this.hasEqualDirections(other);
         }
         hasPattern(pattern) {
             if (this.pats.length !== pattern.length) {
@@ -4255,6 +4636,16 @@ var Flexagonator;
                 i++;
             }
             return true;
+        }
+        /** check if flexagons have same pat directions */
+        hasEqualDirections(other) {
+            if (this.hasSameDirections() && other.hasSameDirections()) {
+                return true;
+            }
+            else if (this.directions === undefined || other.directions === undefined) {
+                return false;
+            }
+            return this.directions.asRaw().every((d, i) => { var _a; return d === ((_a = other.directions) === null || _a === void 0 ? void 0 : _a.asRaw()[i]); });
         }
         /** check if all pats go in the same direction */
         hasSameDirections() {
@@ -4306,16 +4697,16 @@ var Flexagonator;
      * oldAngle: for backward compat with the old API, same as 'whichAngle' except it's often wrong
      */
     class AngleTracker {
-        constructor(corners, oldIsMirrored, oldCorner) {
-            this.corners = corners;
-            this.oldIsMirrored = oldIsMirrored;
-            this.oldCorner = oldCorner;
-        }
         static make(corners, oldIsMirrored, oldCorner) {
             return new AngleTracker(corners, oldIsMirrored, oldCorner !== undefined ? oldCorner : corners[0]);
         }
         static makeDefault() {
             return new AngleTracker([0, 1, 2], false, 0);
+        }
+        constructor(corners, oldIsMirrored, oldCorner) {
+            this.corners = corners;
+            this.oldIsMirrored = oldIsMirrored;
+            this.oldCorner = oldCorner;
         }
         /** @param nextPrevDirs [next direction, previous direction], where true=/ and false=\ */
         rotate(fr, nextPrevDirs) {
@@ -4434,7 +4825,7 @@ var Flexagonator;
             if (other && other.flexagon.directions && other.flexagon.directions.getCount() === flexagon.getPatCount()) {
                 flexagon = flexagon.changeDirections(other.flexagon.directions);
             }
-            const samePatCount = flexagon.getPatCount() === other.flexagon.getPatCount();
+            const samePatCount = other && flexagon.getPatCount() === other.flexagon.getPatCount();
             // only keep the same flexes if the pat count matches
             const flexes = samePatCount ? other.allFlexes : undefined;
             const fm = new FlexagonManager(flexagon, undefined, flexes);
@@ -4576,6 +4967,8 @@ var Flexagonator;
         }
         setDirections(directions) {
             this.flexagon = this.flexagon.changeDirections(directions);
+            // history is invalid, reset using new flexagon
+            this.clearHistory();
         }
         getDirections() {
             return this.flexagon.directions;
@@ -5172,13 +5565,13 @@ var Flexagonator;
         addLocalFlexes(6, flexes);
         flexes["P"] = Flexagonator.makeFlex("pinch flex", [[-2, 1], -3, [5, -4], 6, [-8, 7], -9], [2, [-4, 3], -5, [7, -6], 8, [1, 9]], Flexagonator.FlexRotation.BAC);
         flexes["T"] = Flexagonator.makeFlex("tuck flex", [[[-2, 3], 1], 4, 5, [-7, 6], -8, -9], [3, 4, 5, [-7, 6], -8, [2, [-9, -1]]], Flexagonator.FlexRotation.None);
-        flexes["Ttf"] = Flexagonator.makeFlex("tuck top front", [[[-2, 3], 1], [-5, 4], -6, [8, -7], 9, 10], [[4, -3], 5, [-7, 6], -8, [[10, -1], -9], -2], Flexagonator.FlexRotation.None);
+        flexes["Ttf"] = Flexagonator.makeFlex("tuck top front", [[[-2, 3], 1], [-5, 4], -6, [8, -7], 9, 10], [[4, -3], 5, [-7, 6], -8, [[10, -1], -9], -2], Flexagonator.FlexRotation.CBA);
         flexes["V"] = Flexagonator.makeFlex("v flex", [1, [-3, 2], [5, -4], 6, 7, [-9, 8]], [[2, -1], 3, 4, [-6, 5], [8, -7], 9], Flexagonator.FlexRotation.CBA);
         flexes["Ltf"] = Flexagonator.makeFlex("slot tuck top front", [[[[3, -2], -4], 1], -5, -6, -7, [9, -8], 10], [10, [-2, 1], -3, -4, -5, [9, [-6, [-8, 7]]]], Flexagonator.FlexRotation.ACB);
-        flexes["Ltb"] = Flexagonator.makeFlex("slot tuck top back", [[[-2, [-4, 3]], 1], -5, -6, -7, [9, -8], 10], [-1, -2, -3, [5, -4], [[-7, 8], 6], [-10, 9]], Flexagonator.FlexRotation.BAC);
-        flexes["Lbf"] = Flexagonator.makeFlex("slot tuck bottom front", [[[-2, 3], 1], [-5, 4], -6, -7, [9, -8], 10], [[-3, 2], -4, [6, -5], [-8, 7], -9, [1, -10]], Flexagonator.FlexRotation.CBA);
-        flexes["Lbb"] = Flexagonator.makeFlex("slot tuck bottom back", [[[-2, 3], 1], [-5, 4], -6, -7, [[9, -10], -8], -11], [-2, [4, -3], 5, [[-7, 8], 6], 9, [[-11, -1], 10]], Flexagonator.FlexRotation.BCA);
-        flexes["Lh"] = Flexagonator.makeFlex("slot half", [[[-2, [-4, 3]], 1], -5, -6, -7, [[9, -10], -8], -11], [[[-11, -1], 10], -2, -3, [5, -4], [[-7, 8], 6], 9], Flexagonator.FlexRotation.BAC);
+        flexes["Ltb"] = Flexagonator.makeFlex("slot tuck top back", [[[-2, [-4, 3]], 1], -5, -6, -7, [9, -8], 10], [-1, -2, -3, [5, -4], [[-7, 8], 6], [-10, 9]], Flexagonator.FlexRotation.CBA);
+        flexes["Lbf"] = Flexagonator.makeFlex("slot tuck bottom front", [[[-2, 3], 1], [-5, 4], -6, -7, [9, -8], 10], [[-3, 2], -4, [6, -5], [-8, 7], -9, [1, -10]], Flexagonator.FlexRotation.BAC);
+        flexes["Lbb"] = Flexagonator.makeFlex("slot tuck bottom back", [[[-2, 3], 1], [-5, 4], -6, -7, [[9, -10], -8], -11], [-2, [4, -3], 5, [[-7, 8], 6], 9, [[-11, -1], 10]], Flexagonator.FlexRotation.CAB);
+        flexes["Lh"] = Flexagonator.makeFlex("slot half", [[[-2, [-4, 3]], 1], -5, -6, -7, [[9, -10], -8], -11], [[[-11, -1], 10], -2, -3, [5, -4], [[-7, 8], 6], 9], Flexagonator.FlexRotation.CBA);
         flexes["Lk"] = Flexagonator.makeFlex("slot pocket", [[[[3, -2], -4], 1], -5, -6, -7, [[[-10, 9], 11], -8], 12], [10, [-2, [11, [1, -12]]], -3, -4, -5, [9, [-6, [-8, 7]]]], Flexagonator.FlexRotation.ACB);
         flexes["Tk"] = Flexagonator.makeFlex("ticket flex", [1, 2, 3, [-5, 4], [[[-8, 7], 9], -6], [-11, 10]], [-8, [6, -7], [-4, 5], -3, -2, [[10, -9], [-1, -11]]], Flexagonator.FlexRotation.None);
         return flexes;
@@ -5214,9 +5607,9 @@ var Flexagonator;
     Flexagonator.filterToInteresting = filterToInteresting;
     const primes = [
         "P", "S", "V", "F", "Tw", "Ltf", "Ltb", "Ltb'",
-        "T", "T'", "Tf", "T1", "T1'", "T2", "T2'",
-        "Bf", "Tr2", "Tr3", "Tr4",
-        "Ds", "Tu", "Tao", "Hat", "Fet",
+        "T", "T'", "Tf", "T1", "T1'", "T2", "T2'", // limit the tuck variants
+        "Bf", "Tr2", "Tr3", "Tr4", // local: directions other than ////
+        "Ds", "Tu", "Tao", "Hat", "Fet", // global: directions other than ////
     ];
     const unique = [
         "S3", "St", "Fm", "F3", "F4",
@@ -5900,6 +6293,9 @@ var Flexagonator;
         return result && result.nameError !== undefined;
     }
     Flexagonator.isNamePiecesError = isNamePiecesError;
+    /** generating sequence for 'straight' strip with 6 faces,
+     * designed so 1/2/3 are the common faces & it starts from 1/2 */
+    Flexagonator.straightHexaGenerator = 'P* P+ >P>P P+ ^P P+ ^P^';
     // assuming pats meet in the middle, figure out the angles
     function patCountToAnglesScript(patCount) {
         const center = 360 / patCount;
@@ -6117,7 +6513,7 @@ var Flexagonator;
         else if (n === 6) {
             // we'll assume they want the "straight strip" version
             return {
-                flexes: 'P* P* P+ > P P*',
+                flexes: Flexagonator.straightHexaGenerator,
                 error: { nameError: 'warning: there are multiple possibilities for face count', propValue: n.toString() }
             };
         }
@@ -6224,7 +6620,7 @@ var Flexagonator;
             this.errors = [];
         }
         add(item) {
-            this.description = Object.assign({}, this.description, item);
+            this.description = Object.assign(Object.assign({}, this.description), item);
             if (this.description.error) {
                 this.errors.push(this.description.error);
             }
@@ -6463,6 +6859,10 @@ var Flexagonator;
                 case '1-21':
                     result.push([0, [[0, 0], 0]]);
                     break;
+                // 8
+                case '8':
+                    result.push([[[0, 0], [0, 0]], [[0, 0], [0, 0]]]);
+                    break;
                 // unhandled
                 default:
                     return false;
@@ -6528,10 +6928,10 @@ var Flexagonator;
             this.id = id;
         }
         isEqual(pat) {
-            return this.id === pat.id;
+            return pat !== undefined && this.id === pat.id;
         }
         isEqualStructure(pat) {
-            return pat.id !== undefined; // are they both PatLeafs?
+            return pat !== undefined && pat.id !== undefined; // are they both PatLeafs?
         }
         getLeafCount() {
             return 1;
@@ -6554,9 +6954,6 @@ var Flexagonator;
         }
         getBottom() {
             return -this.id;
-        }
-        getThickness() {
-            return 1;
         }
         getStructure() {
             return '-';
@@ -6640,7 +7037,11 @@ var Flexagonator;
             return this.left.isEqual(pat.left) && this.right.isEqual(pat.right);
         }
         isEqualStructure(pat) {
-            return pat.left !== undefined;
+            const other = pat;
+            if (other === undefined || other.left === undefined) {
+                return false;
+            }
+            return this.left.isEqualStructure(other.left) && this.right.isEqualStructure(other.right);
         }
         getLeafCount() {
             return this.left.getLeafCount() + this.right.getLeafCount();
@@ -6662,9 +7063,6 @@ var Flexagonator;
         }
         getBottom() {
             return this.right.getBottom();
-        }
-        getThickness() {
-            return this.left.getThickness() + this.right.getThickness();
         }
         getStructure() {
             return '[' + this.left.getStructure() + ' ' + this.right.getStructure() + ']';
@@ -6763,24 +7161,24 @@ var Flexagonator;
     const hh5 = { label: "5", color: 0xffff00 };
     const hh6 = { label: "6", color: 0x553900 };
     Flexagonator.hexaHexaProperties = [
-        { front: hh1, back: hh4 },
-        { front: hh2, back: hh5 },
-        { front: hh3, back: hh5 },
-        { front: hh1, back: hh6 },
-        { front: hh2, back: hh6 },
-        { front: hh3, back: hh4 },
-        { front: hh1, back: hh4 },
-        { front: hh2, back: hh5 },
-        { front: hh3, back: hh5 },
-        { front: hh1, back: hh6 },
-        { front: hh2, back: hh6 },
-        { front: hh3, back: hh4 },
-        { front: hh1, back: hh4 },
-        { front: hh2, back: hh5 },
-        { front: hh3, back: hh5 },
-        { front: hh1, back: hh6 },
-        { front: hh2, back: hh6 },
-        { front: hh3, back: hh4 },
+        { front: hh1, back: hh4 }, // 1
+        { front: hh2, back: hh5 }, // 2
+        { front: hh3, back: hh5 }, // 3
+        { front: hh1, back: hh6 }, // 4
+        { front: hh2, back: hh6 }, // 5
+        { front: hh3, back: hh4 }, // 6
+        { front: hh1, back: hh4 }, // 7
+        { front: hh2, back: hh5 }, // 8
+        { front: hh3, back: hh5 }, // 9
+        { front: hh1, back: hh6 }, // 10
+        { front: hh2, back: hh6 }, // 11
+        { front: hh3, back: hh4 }, // 12
+        { front: hh1, back: hh4 }, // 13
+        { front: hh2, back: hh5 }, // 14
+        { front: hh3, back: hh5 }, // 15
+        { front: hh1, back: hh6 }, // 16
+        { front: hh2, back: hh6 }, // 17
+        { front: hh3, back: hh4 }, // 18
     ];
 })(Flexagonator || (Flexagonator = {}));
 var Flexagonator;
@@ -7221,7 +7619,7 @@ var Flexagonator;
         if (!directions || tree.length !== directions.getCount()) {
             return foldpats;
         }
-        return foldpats.map((pat, i) => { return Object.assign({}, pat, { isClock: directions.isDown(i) }); });
+        return foldpats.map((pat, i) => { return Object.assign(Object.assign({}, pat), { isClock: directions.isDown(i) }); });
     }
     function toLeaves(foldpats) {
         const toLeaf = (foldpat) => {

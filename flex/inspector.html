@@ -8,8 +8,9 @@
   <link rel="stylesheet" href="common.css">
   <title>Flexagon Inspector</title>
 
-  <script src="flexagonator_2.js"></script>
+  <script src="flexagonator_1_0.js"></script>
   <script>
+    const version = "1.0";
     // optional URL search parameters
     const paramName = 'name';
     const paramGenerator = 'generator';
@@ -24,6 +25,7 @@
     let gRotate = 0;     // for special flexagon shapes, rotate the displayed flexagon
     let gSlices = null;  // track how they want the template sliced
     let gSliceStr = '';  // visible string describing slices
+    let gCreatedBy = 'name';  // how the current flexagon was created: name | generator | pats | script
 
     function updateUI() {
       const fm = creator.getFlexagonManager();
@@ -56,7 +58,7 @@
     function showFlexagonName() {
       let flexagonDiv = document.getElementById('flexagon');
       if (flexagonDiv !== null) {
-        const name = creator.getName().replace(/</, "&lt;");
+        const name = creator.getName().replace(/</g, "&lt;");
         const angles = creator.getLeafAngles(4);  // 4 digits
         const directions = creator.getDirections();
         const space = '&nbsp;&nbsp;&nbsp;&nbsp;';
@@ -65,8 +67,11 @@
     }
 
     // handle the results of trying to create a new flexagon
-    function handleCreation(result) {
+    function handleCreation(result, createdBy) {
       if (result === true) {
+        if (createdBy) {
+          gCreatedBy = createdBy;
+        }
         clearSlices();
         updateUI();
         showCreationScript();
@@ -80,7 +85,7 @@
     // generating sequence
     function applyGenerator() {
       const flexes = document.getElementById('enterGenerator').value;
-      handleCreation(creator.createFromSequence(flexes));
+      handleCreation(creator.createFromSequence(flexes), 'generator');
     }
     function checkGenerator(key) {
       if (key == 13) {
@@ -91,7 +96,7 @@
     // create from pats
     function applyPats() {
       const rawPats = document.getElementById('enterPats').value;
-      handleCreation(creator.createFromPats(rawPats));
+      handleCreation(creator.createFromPats(rawPats), 'pats');
     }
     function checkPats(key, pats) {
       if (key == 13) {
@@ -186,18 +191,18 @@
       gRotate = overallShape === "bracelet" ? 90 : 0; // normally current hinge at top, but bracelets fit better horizontal
       selectedPieces = { ...selectedPieces, overallShape };
       fillNameLists();
-      handleCreation(creator.setNamePieces(selectedPieces));
+      handleCreation(creator.setNamePieces(selectedPieces), 'name');
     }
     function setLeafShape(leafShape) {
       selectedPieces = { ...selectedPieces, leafShape };
       fillNameLists();
-      handleCreation(creator.setNamePieces(selectedPieces));
+      handleCreation(creator.setNamePieces(selectedPieces), 'name');
     }
     function setPatCount(patsPrefix) {
       const n = Number.parseInt(patsPrefix);
       selectedPieces = { ...selectedPieces, patsPrefix: n };
       fillNameLists();
-      handleCreation(creator.setNamePieces(selectedPieces));
+      handleCreation(creator.setNamePieces(selectedPieces), 'name');
     }
 
     // set the list:string[] of <option> elements under a <select> element
@@ -233,6 +238,9 @@
       const element = document.getElementById('script');
       const result = creator.runScriptString(element.value);
       statusMessage('scriptStatus', result === true ? undefined : result);
+      if (result === true) {
+        gCreatedBy = 'script';
+      }
       updateUI();
     }
 
@@ -332,14 +340,14 @@
       // generating sequence
       const generator = params.get(paramGenerator);
       if (generator) {
-        handleCreation(creator.createFromSequence(generator));
+        handleCreation(creator.createFromSequence(generator), 'generator');
         document.getElementById('enterGenerator').value = generator;
       }
 
       // pat structure
       const createPats = params.get(paramPats);
       if (createPats) {
-        handleCreation(creator.createFromPats(createPats));
+        handleCreation(creator.createFromPats(createPats), 'pats');
         document.getElementById('enterPats').value = createPats;
       }
 
@@ -380,7 +388,8 @@
     }
 
     function showUrlParams() {
-      document.getElementById('urlParams').value = getUrlParams();
+      const newParams = gCreatedBy === 'script' ? '' : getUrlParams()
+      document.getElementById('urlParams').value = newParams;
     }
 
   </script>
@@ -392,8 +401,8 @@
     Flexagon Inspector
     <span class="title-small">companion app for</span>
     <a class="title-link" href="https://www.routledge.com/The-Secret-World-of-Flexagons-Fascinating-Folded-Paper-Puzzles/Elran-Schwartz-Sherman/p/book/9781032553832">
-      <span class="title-medium">The Secret World of Flexagons</span>
-    </a>
+      <span class="title-medium">The Secret World of Flexagons</span></a>
+    <span class="title-small" id="version"></span>
   </h1>
 
   <!-- create flexagon -->
@@ -472,6 +481,8 @@
   <canvas id="unfolded10" width="800" height="600" hidden="true"></canvas>
 
   <script type="text/javascript">
+    document.getElementById('version').innerHTML = `version ${version}`;
+
     fillNameLists();
     updateUI();
     showCreationScript();
@@ -483,6 +494,9 @@
     let backside = document.getElementById('backside');
     backside.addEventListener('mousemove', backsideMouseMove, false);
     backside.addEventListener('click', backsideMouseClick, false);
+
+    let advanced = document.getElementById('advancedCheck').checked;
+    setAdvanced(advanced);
   </script>
 </body>
 

@@ -8163,4 +8163,3 @@ var Flexagonator;
         return { x: xOff - inputMin.x, y: yOff - inputMin.y };
     }
 })(Flexagonator || (Flexagonator = {}));
-//# sourceMappingURL=out.js.map
